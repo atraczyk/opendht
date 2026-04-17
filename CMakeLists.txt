@@ -920,6 +920,12 @@ if (BUILD_TESTING)
             add_test(NAME ${test_name} COMMAND ${test_name})
         endif()
     endforeach()
+
+    # Standalone simulation demo tool (not a CppUnit test).
+    # Run with: ./sim_demo [--sim-clock|--wall-clock] [--seed HEX] [--nodes N] [--latency MS]
+    add_executable(sim_demo tests/sim_demo.cpp)
+    target_include_directories(sim_demo PRIVATE tests)
+    target_link_libraries(sim_demo PRIVATE opendht ${CMAKE_THREAD_LIBS_INIT})
 endif()
 
 if (OPENDHT_CPACK)
