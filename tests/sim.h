@@ -140,18 +140,27 @@ class SimNetwork;
 
 /**
  * An in-process DatagramSocket that:
- *  - records every sendTo() call as a TraceEntry (with the virtual timestamp),
+ *  - records every sendTo() call as a TraceEntry using a configurable
+ *    time source (virtual for deterministic traces, real for wall-clock traces),
  *  - enqueues outgoing packets in the owning SimNetwork,
  *  - accepts injected incoming packets via inject().
  */
 class SimDatagramSocket : public net::DatagramSocket
 {
 public:
-    SimDatagramSocket(SockAddr bound, SimNetwork& net, SimClock& clock, SimTrace& trace)
+    /**
+     * @param vtime_fn  Time source for TraceEntry timestamps.
+     *                  Pass clock.fn() for reproducible virtual timestamps;
+     *                  pass {} (or a real-clock lambda) to record wall-clock
+     *                  timestamps so two runs are distinguishably different.
+     */
+    SimDatagramSocket(SockAddr bound, SimNetwork& net, SimClock& clock, SimTrace& trace,
+                      std::function<time_point()> vtime_fn = {})
         : net_(net)
         , clock_(clock)
         , trace_(trace)
         , bound_(std::move(bound))
+        , vtime_fn_(vtime_fn ? std::move(vtime_fn) : []{ return clock::now(); })
     {}
 
     int sendTo(const SockAddr& dest, const uint8_t* data, size_t size, bool replied) override;
@@ -174,6 +183,7 @@ private:
     SimClock&   clock_;
     SimTrace&   trace_;
     SockAddr    bound_;
+    std::function<time_point()> vtime_fn_;
 };
 
 // ─── SimNetwork ───────────────────────────────────────────────────────────────
@@ -239,7 +249,7 @@ private:
 inline int
 SimDatagramSocket::sendTo(const SockAddr& dest, const uint8_t* data, size_t size, bool /*replied*/)
 {
-    trace_.push_back({clock_.now(), bound_, dest, crc32(data, size)});
+    trace_.push_back({vtime_fn_(), bound_, dest, crc32(data, size)});
     net_.enqueue(bound_, dest, {data, data + size}, clock_.now());
     return 0;
 }
@@ -310,9 +320,16 @@ runScenario(SimConfig cfg)
     // ── Create and start nodes ────────────────────────────────────────────────
     std::vector<std::unique_ptr<DhtRunner>> nodes(N);
 
+    // With the virtual clock: trace records SimClock time → identical both runs.
+    // Without it: trace records real clock::now() → timestamps differ each run,
+    // proving the virtual clock is what makes record/replay possible.
+    std::function<time_point()> vtime_fn = cfg.use_sim_clock
+        ? clock.fn()
+        : std::function<time_point()>([]{ return clock::now(); });
+
     for (size_t i = 0; i < N; ++i) {
         auto addr = makeLoopbackAddr(static_cast<in_port_t>(BASE_PORT + i));
-        auto sock = std::make_unique<SimDatagramSocket>(addr, net, clock, trace);
+        auto sock = std::make_unique<SimDatagramSocket>(addr, net, clock, trace, vtime_fn);
         net.registerSocket(addr, sock.get());
 
         DhtRunner::Config config;
