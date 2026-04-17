@@ -1990,7 +1990,8 @@ fromDhtConfig(const Config& config)
 Dht::Dht(std::unique_ptr<net::DatagramSocket>&& sock,
          const Config& config,
          const Sp<Logger>& l,
-         std::unique_ptr<std::mt19937_64>&& rda)
+         std::unique_ptr<std::mt19937_64>&& rda,
+         std::function<time_point()> clockFn)
     : DhtInterface(l)
     , rd(rda ? std::move(*rda) : crypto::getSeededRandomEngine<std::mt19937_64>())
     , myid(config.node_id ? config.node_id : InfoHash::getRandom(rd))
@@ -2021,6 +2022,8 @@ Dht::Dht(std::unique_ptr<net::DatagramSocket>&& sock,
     , maintain_storage(config.maintain_storage)
     , public_stable(config.public_stable)
 {
+    if (clockFn)
+        scheduler.setClock(std::move(clockFn));
     scheduler.syncTime();
     auto s = network_engine.getSocket();
     if (not s or (not s->hasIPv4() and not s->hasIPv6()))

@@ -66,6 +66,13 @@ public:
         IdentityAnnouncedCb identityAnnouncedCb {};
         PublicAddressChangedCb publicAddressChangedCb {};
         std::unique_ptr<std::mt19937_64> rng {};
+        /**
+         * Optional clock source for the DHT scheduler.  When set, the runner
+         * and the underlying Dht will call this function instead of
+         * clock::now() to obtain the current time.  Primarily useful for
+         * deterministic simulation testing.
+         */
+        std::function<time_point()> clock {};
         Context() {}
     };
 
@@ -593,6 +600,12 @@ private:
     std::atomic<State> running {State::Idle};
     std::atomic_size_t ongoing_ops {0};
     std::vector<ShutdownCallback> shutdownCallbacks_;
+
+    /** Optional injectable clock (null → clock::now()). */
+    std::function<time_point()> clock_fn_ {};
+
+    /** Returns the current virtual or wall-clock time. */
+    time_point now_() const { return clock_fn_ ? clock_fn_() : clock::now(); }
 
     NodeStatus status4 {NodeStatus::Disconnected}, status6 {NodeStatus::Disconnected};
 

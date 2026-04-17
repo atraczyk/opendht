@@ -110,10 +110,18 @@ public:
      * operations.
      */
     inline const time_point& time() const { return now; }
-    inline time_point syncTime() { return (now = clock::now()); }
+    inline time_point syncTime() { return (now = now_fn_ ? now_fn_() : clock::now()); }
     inline void syncTime(const time_point& n) { now = n; }
 
+    /**
+     * Override the clock source used by syncTime().
+     * When set, syncTime() calls fn() instead of clock::now().
+     * Pass an empty function to restore the default wall-clock behaviour.
+     */
+    void setClock(std::function<time_point()> fn) { now_fn_ = std::move(fn); }
+
 private:
+    std::function<time_point()> now_fn_ {};
     time_point now {clock::now()};
     std::multimap<time_point, Sp<Job>> timers {}; /* the jobs ordered by time */
 };

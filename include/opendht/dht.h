@@ -51,7 +51,8 @@ public:
     Dht(std::unique_ptr<net::DatagramSocket>&& sock,
         const Config& config,
         const Sp<Logger>& l = {},
-        std::unique_ptr<std::mt19937_64>&& rd = {});
+        std::unique_ptr<std::mt19937_64>&& rd = {},
+        std::function<time_point()> clock = {});
 
     virtual ~Dht();
 
