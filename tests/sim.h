@@ -248,10 +248,24 @@ SimDatagramSocket::sendTo(const SockAddr& dest, const uint8_t* data, size_t size
 
 struct SimConfig
 {
-    uint64_t                    seed          {42};
-    bool                        use_sim_clock {true};
-    std::chrono::milliseconds   latency       {5};
-    size_t                      node_count    {6};
+    uint64_t                    seed              {42};
+    bool                        use_sim_clock     {true};
+    std::chrono::milliseconds   latency           {5};
+    size_t                      node_count        {6};
+
+    /**
+     * Staggered bootstrap: add at most this many nodes per batch before
+     * letting the network run for bootstrap_interval of virtual time.
+     * Each new node bootstraps through a randomly chosen already-running node
+     * rather than always through node 0, which avoids flooding a single entry
+     * point and produces more realistic routing-table diversity.
+     *
+     * Set to 0 (default) to add all nodes simultaneously (original behaviour).
+     */
+    size_t                      bootstrap_batch   {0};
+
+    /** Virtual time to run between bootstrap batches (ignored when batch==0). */
+    std::chrono::milliseconds   bootstrap_interval{std::chrono::seconds(2)};
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -330,29 +344,58 @@ runScenario(SimConfig cfg)
     bool put_done  = false;
     bool get_done  = false;
 
+    // Only step nodes that have been started so far (grows as batches join).
+    size_t active_nodes = 1; // node 0 is always first
+
     auto step = [&]() -> time_point {
         net.deliverDue(clock.now());
         time_point next = time_point::max();
-        for (auto& n : nodes) {
-            auto w = n->loop();
+        for (size_t i = 0; i < active_nodes; ++i) {
+            auto w = nodes[i]->loop();
             if (w < next)
                 next = w;
         }
         return next;
     };
 
-    // Give nodes 10 s of virtual time to bootstrap before issuing operations.
-    auto boot_deadline = clock.now() + std::chrono::seconds(10);
-    while (clock.now() < boot_deadline) {
-        auto next = step();
-        auto net_next = net.nextDelivery();
-        auto advance_to = std::min({next, net_next, boot_deadline});
-        if (advance_to <= clock.now())
-            advance_to = clock.now() + std::chrono::milliseconds(1);
-        clock.set(advance_to);
+    auto runUntil = [&](time_point until) {
+        while (clock.now() < until) {
+            auto next     = step();
+            auto net_next = net.nextDelivery();
+            auto advance_to = std::min({next, net_next, until});
+            if (advance_to <= clock.now())
+                advance_to = clock.now() + std::chrono::milliseconds(1);
+            clock.set(advance_to);
+        }
+    };
+
+    // ── Bootstrap ─────────────────────────────────────────────────────────────
+    const size_t batch = (cfg.bootstrap_batch == 0) ? (N - 1) : cfg.bootstrap_batch;
+
+    // Use a separate RNG stream for target selection so it doesn't perturb
+    // the master_rng used for node identity (preserves determinism).
+    std::mt19937_64 boot_rng(cfg.seed ^ 0x1234567890ABCDEFULL);
+
+    for (size_t i = 1; i < N; ) {
+        // Add up to `batch` nodes in this wave.
+        size_t wave_end = std::min(i + batch, N);
+        for (; i < wave_end; ++i) {
+            // Pick a random already-active node as the entry point.
+            size_t target = std::uniform_int_distribution<size_t>(0, active_nodes - 1)(boot_rng);
+            auto entry = makeLoopbackAddr(static_cast<in_port_t>(BASE_PORT + target));
+            nodes[i]->bootstrap(entry);
+            ++active_nodes;
+        }
+
+        // Let this batch stabilise before the next wave (or before operations).
+        runUntil(clock.now() + cfg.bootstrap_interval);
     }
 
-    // Post put from the middle node, get from node 0.
+    // Extra settling time after all nodes are in (total boot budget: 10 s).
+    auto boot_deadline = clock.now() + std::chrono::seconds(10);
+    runUntil(boot_deadline);
+
+    // ── Put / Get ─────────────────────────────────────────────────────────────
     auto key = InfoHash::get("sim-test-key");
     Value val {reinterpret_cast<const uint8_t*>("hello"), 5};
     nodes[N / 2]->put(key, std::move(val), [&](bool ok) { if (ok) put_done = true; });
@@ -365,7 +408,7 @@ runScenario(SimConfig cfg)
 
     // Run until both operations complete or deadline.
     while ((!put_done || !get_done) && clock.now() < deadline) {
-        auto next = step();
+        auto next     = step();
         auto net_next = net.nextDelivery();
         auto advance_to = std::min({next, net_next, deadline});
         if (advance_to <= clock.now())

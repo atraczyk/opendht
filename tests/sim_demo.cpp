@@ -23,12 +23,14 @@ using namespace dht::sim;
 using namespace std::chrono;
 
 static void usage(const char* prog) {
-    printf("Usage: %s [--sim-clock | --wall-clock] [--seed HEX] [--nodes N] [--latency MS]\n\n"
-           "  --sim-clock   Use virtual clock (default) — runs are byte-identical for same seed\n"
-           "  --wall-clock  Use real wall clock — timestamps vary between runs\n"
-           "  --seed HEX    RNG seed as a hex integer (default: 0xdeadbeef)\n"
-           "  --nodes N     Number of DHT nodes (default: 4)\n"
-           "  --latency MS  Simulated one-way latency in milliseconds (default: 5)\n",
+    printf("Usage: %s [options]\n\n"
+           "  --sim-clock           Use virtual clock (default) — runs are byte-identical for same seed\n"
+           "  --wall-clock          Use real wall clock — scheduler stalls, incomplete simulation\n"
+           "  --seed HEX            RNG seed as a hex integer (default: 0xdeadbeef)\n"
+           "  --nodes N             Number of DHT nodes (default: 4)\n"
+           "  --latency MS          Simulated one-way latency in milliseconds (default: 5)\n"
+           "  --batch N             Bootstrap batch size — nodes join N at a time (default: 0 = all at once)\n"
+           "  --batch-interval MS   Virtual ms to let each batch settle before the next (default: 2000)\n",
            prog);
 }
 
@@ -63,6 +65,10 @@ int main(int argc, char** argv) {
             cfg.node_count = (int)strtoul(argv[++i], nullptr, 10);
         } else if (strcmp(argv[i], "--latency") == 0 && i + 1 < argc) {
             cfg.latency = milliseconds(strtoul(argv[++i], nullptr, 10));
+        } else if (strcmp(argv[i], "--batch") == 0 && i + 1 < argc) {
+            cfg.bootstrap_batch = (size_t)strtoul(argv[++i], nullptr, 10);
+        } else if (strcmp(argv[i], "--batch-interval") == 0 && i + 1 < argc) {
+            cfg.bootstrap_interval = milliseconds(strtoul(argv[++i], nullptr, 10));
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             usage(argv[0]);
             return 0;
@@ -78,10 +84,16 @@ int main(int argc, char** argv) {
     printf("│        OpenDHT  —  Deterministic Simulation Demo                   │\n");
     printf("└─────────────────────────────────────────────────────────────────────┘\n");
     printf("\n");
-    printf("  clock : %s\n", cfg.use_sim_clock ? "virtual (sim clock)" : "real (wall clock)");
-    printf("  seed  : 0x%08lX\n", (unsigned long)cfg.seed);
-    printf("  nodes : %zu\n", (size_t)cfg.node_count);
+    printf("  clock  : %s\n", cfg.use_sim_clock ? "virtual (sim clock)" : "real (wall clock)");
+    printf("  seed   : 0x%08lX\n", (unsigned long)cfg.seed);
+    printf("  nodes  : %zu\n", (size_t)cfg.node_count);
     printf("  latency: %lld ms\n", (long long)duration_cast<milliseconds>(cfg.latency).count());
+    if (cfg.bootstrap_batch > 0)
+        printf("  batch  : %zu nodes / %lld ms interval\n",
+               cfg.bootstrap_batch,
+               (long long)duration_cast<milliseconds>(cfg.bootstrap_interval).count());
+    else
+        printf("  batch  : all at once\n");
     printf("\n");
 
     printf("Running simulation  (run 1) …\n");
